@@ -26,7 +26,7 @@ def main():
         """)
 
         conn.execute(f"USE {LAKE_NAME};")
-        
+
         # Create table
         conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {PROJECT_NAME} (
@@ -36,7 +36,7 @@ def main():
                 counts BIGINT
             );
         """)
-        
+
         # Partition it
         conn.execute(f"""
             ALTER TABLE {PROJECT_NAME}
@@ -49,12 +49,12 @@ def main():
             SELECT
                 column0 AS geo,
                 CAST(
-                    regexp_extract(filename, '(\\d{4}-\\d{2}-\\d{2})_', 1)
+                    regexp_extract(filename, '(\\d{4}-\\d{2}-\\d{2})', 1)
                     AS DATE
                 ) AS date,
                 column1 AS types,
                 CAST(count AS BIGINT) AS counts
-            FROM read_parquet(
+            FROM read_csv(
                 '/gpfs1/home/m/v/mvarnold/wikipedia-parsing/data/1grams/*_wikipedia_1grams.tsv',
                 delim='\t',
                 header=true,
@@ -67,8 +67,4 @@ def main():
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Import baby names data into DuckDB")
-    parser.add_argument('location',
-                       help="Location to import (e.g., 'united_states', 'quebec')")
-    args = parser.parse_args()
-    main(args.location)
+    main()
