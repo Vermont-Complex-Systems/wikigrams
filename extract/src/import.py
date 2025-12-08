@@ -10,26 +10,21 @@ import duckdb
 load_dotenv()
 from pyprojroot import here
 
-PROJECT_ROOT = here()
-LAKE_NAME = os.getenv('LAKE_NAME')
-PROJECT_NAME = os.getenv('DATASET_ID')
-DATA_PATH =  os.getenv('DATA_PATH')
-
 def main():
     """Load data for a specific location"""
 
     conn = duckdb.connect()
     try:
         conn.execute(f"""
-            ATTACH 'ducklake:{PROJECT_ROOT / "metadata.ducklake"}' AS {LAKE_NAME}
-                (DATA_PATH '{DATA_PATH}');
+            ATTACH 'ducklake:metadata.ducklake"' AS wikilake
+                (DATA_PATH '/netfiles/compethicslab/wikimedia_temp');
         """)
 
-        conn.execute(f"USE {LAKE_NAME};")
+        conn.execute(f"USE wikilake;")
 
         # Create table
         conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS {PROJECT_NAME} (
+            CREATE TABLE IF NOT EXISTS wikigrams (
                 geo TEXT,
                 date DATE,
                 types TEXT,
@@ -39,13 +34,13 @@ def main():
 
         # Partition it
         conn.execute(f"""
-            ALTER TABLE {PROJECT_NAME}
+            ALTER TABLE wikigrams
                 SET PARTITIONED BY (geo, date);
         """)
 
         # Insert data
         conn.execute(f"""
-            INSERT INTO {PROJECT_NAME} (geo, date, types, counts)
+            INSERT INTO wikigrams (geo, date, types, counts)
             SELECT
                 column0 AS geo,
                 CAST(
