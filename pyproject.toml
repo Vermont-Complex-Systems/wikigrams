@@ -6,12 +6,18 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "altair>=6.0.0",
+    "dotenv>=0.9.9",
     "duckdb>=1.4.2",
     "duckdb-engine>=0.17.0",
     "ipykernel>=7.1.0",
     "jupysql>=0.11.1",
     "matplotlib>=3.10.7",
     "pandas>=2.3.3",
+    "pyprojroot>=0.3.0",
     "toml>=0.10.2",
     "vl-convert-python>=1.8.0",
+    "storywrangler-sdk",
 ]
+
+[tool.uv.sources]
+storywrangler-sdk = { path = "../storywrangler/packages/sdk" }
