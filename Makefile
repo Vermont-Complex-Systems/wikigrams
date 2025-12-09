@@ -1,7 +1,13 @@
-.PHONY: all import prepare submit
+.PHONY: all import partition-week partition-month prepare submit
 
 import:
-	uv run python extract/src/import.py
+	bash extract/import.sh
+
+partition-week:
+	bash partitions/weekly.sh
+
+partition-month:
+	bash partitions/monthly.sh
 
 prepare:
 	uv run python adapter/src/prepare.py
