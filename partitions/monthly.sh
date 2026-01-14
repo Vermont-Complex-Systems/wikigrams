@@ -28,8 +28,9 @@ ALTER TABLE wikigrams_monthly SET PARTITIONED BY (geo, month);
 -- Delete all existing data
 DELETE FROM wikigrams_monthly;
 
--- Insert all aggregated data in ONE transaction
-INSERT INTO wikigrams_monthly
+-- Materialize aggregation in temp table first (in-memory)
+-- This prevents parallel writes from creating many small files per partition
+CREATE TEMP TABLE monthly_agg AS
 SELECT
     geo,
     DATE_TRUNC('month', date) as month,
@@ -37,6 +38,11 @@ SELECT
     SUM(counts)::BIGINT AS counts
 FROM wikigrams
 GROUP BY geo, DATE_TRUNC('month', date), types;
+
+-- Insert from materialized temp table
+-- This writes larger, consolidated files per partition
+INSERT INTO wikigrams_monthly
+SELECT * FROM monthly_agg;
 
 -- Show summary
 SELECT

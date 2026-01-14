@@ -22,23 +22,14 @@ CREATE TABLE IF NOT EXISTS wikigrams (
 -- Set partitioning (idempotent)
 ALTER TABLE wikigrams SET PARTITIONED BY (geo, date);
 
--- Delete existing data that we're about to re-import
-DELETE FROM wikigrams 
-WHERE (geo, date) IN (
-    SELECT 
-        column0 AS geo,
-        CAST(regexp_extract(filename, '(\d{4}-\d{2}-\d{2})_', 1) AS DATE) AS date
-    FROM read_csv(
-        '/gpfs1/home/m/v/mvarnold/wikipedia-parsing/data/1grams/*_wikipedia_1grams.tsv',
-        delim='\t',
-        header=true,
-        filename=true
-    )
-    WHERE column0 IN ('United States', 'Canada', 'Australia', 'United Kingdom')
-);
+-- Enable data inlining for small incremental updates
+-- Inserts with fewer rows than this limit will be stored in metadata instead of creating new parquet files
+-- Periodic CHECKPOINT will flush inlined data to consolidated parquet files
+CALL wikilake.set_option('data_inlining_row_limit', 100000, table_name => 'wikigrams');
 
--- Insert data
-INSERT INTO wikigrams (geo, date, types, counts)
+-- Materialize CSV data in temp table first
+-- This prevents parallel reads from creating many small files per partition
+CREATE TEMP TABLE csv_import AS
 SELECT
     column0 AS geo,
     CAST(regexp_extract(filename, '(\d{4}-\d{2}-\d{2})_', 1) AS DATE) AS date,
@@ -51,6 +42,18 @@ FROM read_csv(
     filename=true
 )
 WHERE column0 IN ('United States', 'Canada', 'Australia', 'United Kingdom');
+
+-- Insert from materialized temp table
+-- For incremental updates: If rows < data_inlining_row_limit, data goes to metadata
+-- For bulk imports: If rows > limit, creates consolidated parquet files per partition
+INSERT INTO wikigrams (geo, date, types, counts)
+SELECT * FROM csv_import;
+
+-- Show import summary
+SELECT
+    COUNT(DISTINCT date) as dates_imported,
+    COUNT(*) as total_rows
+FROM csv_import;
 EOF
 
 echo "Import complete!"

@@ -1,5 +1,5 @@
 """
-Submit babynames dataset registration to datalakes API.
+Submit wikigrams dataset registration to datalakes API.
 """
 
 import requests
@@ -14,30 +14,14 @@ import json
 # Load environment variables
 load_dotenv()
 
-def get_source_urls():
+def get_source_raw():
     """Read source URLs from list_urls.csv and group by location.
 
     Returns dict mapping location names to their source URLs.
     Single URL locations return a string, multiple URLs return a list.
-    """
-    sources = defaultdict(list)
-    csv_path = Path("extract/hand/list_urls.csv")
-
-    if not csv_path.exists():
-        print(f"⚠ Warning: {csv_path} not found, skipping sources")
-        return {}
-
-    with open(csv_path, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            location = row['location']
-            url = row['url']
-            sources[location].append(url)
-
-    # Convert single-URL locations to strings instead of lists
+    """    
     return {
-        location: urls[0] if len(urls) == 1 else urls
-        for location, urls in sources.items()
+        'location': '/gpfs1/home/m/v/mvarnold/wikipedia-parsing/data/1grams/*_wikipedia_1grams.tsv'
     }
 
 def get_table_schema(conn, table_name):
@@ -55,9 +39,7 @@ def get_ducklake_table_metadata(conn):
     """
 
     # Get ducklake data path information
-    ducklake_data_path = conn.execute("""
-        select * from __ducklake_metadata_babylake.ducklake_metadata;
-    """).fetchall()[2][1]
+    ducklake_data_path = os.getenv("DATA_PATH")
 
     if Path(ducklake_data_path).exists() == False:
         raise RuntimeError("Could not retrieve ducklake metadata")
@@ -72,8 +54,8 @@ def get_ducklake_table_metadata(conn):
     for table_name in tables:
         result = conn.execute(f"""
             SELECT df.path
-            FROM __ducklake_metadata_babylake.ducklake_data_file df
-            JOIN __ducklake_metadata_babylake.ducklake_table t ON df.table_id = t.table_id
+            FROM __ducklake_metadata_wikilake.ducklake_data_file df
+            JOIN __ducklake_metadata_wikilake.ducklake_table t ON df.table_id = t.table_id
             WHERE t.table_name = '{table_name}'
               AND df.end_snapshot IS NULL
         """).fetchall()
@@ -84,8 +66,8 @@ def get_ducklake_table_metadata(conn):
 
     return tables_metadata, ducklake_data_path
 
-def register_babynames_datalake():
-    """Register babynames dataset with the datalakes API."""
+def register_wikigrams_datalake():
+    """Register wikigrams dataset with the datalakes API."""
 
     # Get configuration from environment variables
     dataset_id = os.getenv("DATASET_ID")
@@ -93,24 +75,24 @@ def register_babynames_datalake():
     api_url = os.getenv("API_URL")
 
     conn = duckdb.connect()
-    conn.execute(f"ATTACH 'ducklake:metadata.ducklake' AS babylake;")
-    conn.execute(f"USE babylake;")
+    conn.execute(f"ATTACH 'ducklake:metadata.ducklake' AS wikilake (DATA_PATH '{data_location}');")
+    conn.execute(f"USE wikilake;")
 
     # Get current table metadata from ducklake
     file_paths, ducklake_data_path = get_ducklake_table_metadata(conn)
 
-    # Get schema from babynames table (for reference)
-    schema = get_table_schema(conn, "babynames")
+    # Get schema from wikigrams table (for reference)
+    schema = get_table_schema(conn, "wikigrams")
 
     # Get source URLs for validation
-    geo_sources = get_source_urls()
+    geo_sources = get_source_raw()
 
     # Dataset metadata for registration
     dataset_metadata = {
         "dataset_id": dataset_id,
         "data_location": data_location,
         "data_format": "ducklake",
-        "description": "Baby names by popularity, year, and location with entity mappings",
+        "description": "Wikipedia n-grams by frequency, date, and location with entity mappings",
         "tables_metadata": file_paths,
         "ducklake_data_path": ducklake_data_path,
 
@@ -174,7 +156,7 @@ def main():
 
     # Get default values from environment
     dataset_id = os.getenv("DATASET_ID")
-    success = register_babynames_datalake()
+    success = register_wikigrams_datalake()
 
     if success:
         print(f"\n🚀 {dataset_id} datalake is now available!")

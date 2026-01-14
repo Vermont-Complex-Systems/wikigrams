@@ -28,8 +28,9 @@ ALTER TABLE wikigrams_weekly SET PARTITIONED BY (geo, week);
 -- Delete all existing data
 DELETE FROM wikigrams_weekly;
 
--- Insert all aggregated data in ONE transaction
-INSERT INTO wikigrams_weekly
+-- Materialize aggregation in temp table first (in-memory)
+-- This prevents parallel writes from creating many small files per partition
+CREATE TEMP TABLE weekly_agg AS
 SELECT
     geo,
     DATE_TRUNC('week', date) as week,
@@ -37,6 +38,11 @@ SELECT
     SUM(counts)::BIGINT AS counts
 FROM wikigrams
 GROUP BY geo, DATE_TRUNC('week', date), types;
+
+-- Insert from materialized temp table
+-- This writes larger, consolidated files per partition
+INSERT INTO wikigrams_weekly
+SELECT * FROM weekly_agg;
 
 -- Show summary
 SELECT
@@ -47,6 +53,12 @@ SELECT
 FROM wikigrams_weekly
 GROUP BY geo
 ORDER BY geo;
+
+-- Show file count after merge (sample partition)
+.print ""
+.print "Sample partition file count (geo=United States/week=2025-03-03):"
+SELECT COUNT(*) as parquet_file_count
+FROM glob('/netfiles/compethicslab/wikimedia/main/wikigrams_weekly/geo=United%20States/week=2025-03-03/*.parquet');
 EOF
 
 echo "Weekly aggregation complete!"
