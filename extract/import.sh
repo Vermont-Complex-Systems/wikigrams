@@ -6,7 +6,7 @@ echo "Starting daily data import..."
 
 duckdb << 'EOF'
 
-ATTACH 'ducklake:./metadata.ducklake' AS wikilake 
+ATTACH 'ducklake:metadata.ducklake' AS wikilake 
 (DATA_PATH '/netfiles/compethicslab/wikimedia');
 
 USE wikilake;
@@ -22,10 +22,16 @@ CREATE TABLE IF NOT EXISTS wikigrams (
 -- Set partitioning (idempotent)
 ALTER TABLE wikigrams SET PARTITIONED BY (geo, date);
 
+-- Configure target file size for better file layout
+CALL wikilake.set_option('target_file_size', '512MB');
+
 -- Enable data inlining for small incremental updates
 -- Inserts with fewer rows than this limit will be stored in metadata instead of creating new parquet files
 -- Periodic CHECKPOINT will flush inlined data to consolidated parquet files
 CALL wikilake.set_option('data_inlining_row_limit', 100000, table_name => 'wikigrams');
+
+-- Use 12 threads for fast CSV reading and aggregation
+-- (threads will be reduced to 1 for INSERT to avoid small files)
 
 -- Materialize CSV data in temp table first
 -- This prevents parallel reads from creating many small files per partition
@@ -42,6 +48,11 @@ FROM read_csv(
     filename=true
 )
 WHERE column0 IN ('United States', 'Canada', 'Australia', 'United Kingdom');
+
+-- Reduce threads for INSERT to create fewer, larger files per partition
+-- With multiple threads, DuckDB creates many small files per partition
+-- With 1 thread, DuckDB creates consolidated files per partition
+SET threads = 1;
 
 -- Insert from materialized temp table
 -- For incremental updates: If rows < data_inlining_row_limit, data goes to metadata

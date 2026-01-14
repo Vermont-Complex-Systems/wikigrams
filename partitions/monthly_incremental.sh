@@ -1,8 +1,8 @@
 #!/bin/bash
-set -e  # Exit on error
+set -e
 source .venv/bin/activate
 
-echo "Starting monthly aggregation..."
+echo "Starting incremental monthly aggregation..."
 
 duckdb << 'EOF'
 SET memory_limit = '30GB';
@@ -13,10 +13,6 @@ ATTACH 'ducklake:./metadata.ducklake' AS wikilake
 (DATA_PATH '/netfiles/compethicslab/wikimedia');
 
 USE wikilake;
-
--- Configure target file size BEFORE creating table
--- This helps DuckDB write larger files per partition
-CALL wikilake.set_option('target_file_size', '512MB');
 
 -- Create table if it doesn't exist
 CREATE TABLE IF NOT EXISTS wikigrams_monthly (
@@ -29,12 +25,23 @@ CREATE TABLE IF NOT EXISTS wikigrams_monthly (
 -- Set partitioning (idempotent)
 ALTER TABLE wikigrams_monthly SET PARTITIONED BY (geo, month);
 
--- For full table refresh, DELETE works for both empty and populated tables
--- (TRUNCATE would fail on newly created partitioned tables in some cases)
-DELETE FROM wikigrams_monthly;
+-- Find months that need updating (new data or changed data)
+CREATE TEMP TABLE months_to_update AS
+SELECT DISTINCT
+    geo,
+    DATE_TRUNC('month', date) as month
+FROM wikigrams
+WHERE NOT EXISTS (
+    SELECT 1 FROM wikigrams_monthly m
+    WHERE m.geo = wikigrams.geo
+      AND m.month = DATE_TRUNC('month', wikigrams.date)
+);
 
--- Materialize aggregation in temp table first (in-memory)
--- This prevents parallel writes from creating many small files per partition
+-- Delete old data for months being updated (in case of corrections)
+DELETE FROM wikigrams_monthly
+WHERE (geo, month) IN (SELECT geo, month FROM months_to_update);
+
+-- Materialize aggregation for only the months being updated
 CREATE TEMP TABLE monthly_agg AS
 SELECT
     geo,
@@ -42,19 +49,25 @@ SELECT
     types,
     SUM(counts)::BIGINT AS counts
 FROM wikigrams
+WHERE (geo, DATE_TRUNC('month', date)) IN (
+    SELECT geo, month FROM months_to_update
+)
 GROUP BY geo, DATE_TRUNC('month', date), types;
 
--- Reduce threads for INSERT to create fewer, larger files
--- With 12 threads, DuckDB creates ~12 files per partition
--- With 1 thread, DuckDB creates 1 consolidated file per partition
-SET threads = 1;
-
--- Insert from materialized temp table
--- This writes larger, consolidated files per partition
+-- Insert new monthly aggregates
 INSERT INTO wikigrams_monthly
 SELECT * FROM monthly_agg;
 
+-- Show what was updated
+.print "Months updated:"
+SELECT geo, month, COUNT(*) as rows_added
+FROM monthly_agg
+GROUP BY geo, month
+ORDER BY geo, month;
+
 -- Show summary
+.print ""
+.print "Total table summary:"
 SELECT
     geo,
     COUNT(DISTINCT month) as months,
@@ -67,4 +80,4 @@ GROUP BY geo
 ORDER BY geo;
 EOF
 
-echo "Monthly aggregation complete!"
+echo "Incremental monthly aggregation complete!"

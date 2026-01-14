@@ -1,8 +1,8 @@
 #!/bin/bash
-set -e  # Exit on error
+set -e
 source .venv/bin/activate
 
-echo "Starting weekly aggregation..."
+echo "Starting incremental weekly aggregation..."
 
 duckdb << 'EOF'
 SET memory_limit = '30GB';
@@ -13,10 +13,6 @@ ATTACH 'ducklake:./metadata.ducklake' AS wikilake
 (DATA_PATH '/netfiles/compethicslab/wikimedia');
 
 USE wikilake;
-
--- Configure target file size BEFORE creating table
--- This helps DuckDB write larger files per partition
-CALL wikilake.set_option('target_file_size', '512MB');
 
 -- Create table if it doesn't exist
 CREATE TABLE IF NOT EXISTS wikigrams_weekly (
@@ -29,12 +25,23 @@ CREATE TABLE IF NOT EXISTS wikigrams_weekly (
 -- Set partitioning (idempotent)
 ALTER TABLE wikigrams_weekly SET PARTITIONED BY (geo, week);
 
--- For full table refresh, TRUNCATE is more efficient than DELETE
--- Only truncate if table has data (handles both initial setup and rebuild)
--- DELETE FROM wikigrams_weekly;
+-- Find weeks that need updating (new data or changed data)
+CREATE TEMP TABLE weeks_to_update AS
+SELECT DISTINCT
+    geo,
+    DATE_TRUNC('week', date) as week
+FROM wikigrams
+WHERE NOT EXISTS (
+    SELECT 1 FROM wikigrams_weekly w
+    WHERE w.geo = wikigrams.geo
+      AND w.week = DATE_TRUNC('week', wikigrams.date)
+);
 
--- Materialize aggregation in temp table first (in-memory)
--- This prevents parallel writes from creating many small files per partition
+-- Delete old data for weeks being updated (in case of corrections)
+DELETE FROM wikigrams_weekly
+WHERE (geo, week) IN (SELECT geo, week FROM weeks_to_update);
+
+-- Materialize aggregation for only the weeks being updated
 CREATE TEMP TABLE weekly_agg AS
 SELECT
     geo,
@@ -42,19 +49,25 @@ SELECT
     types,
     SUM(counts)::BIGINT AS counts
 FROM wikigrams
+WHERE (geo, DATE_TRUNC('week', date)) IN (
+    SELECT geo, week FROM weeks_to_update
+)
 GROUP BY geo, DATE_TRUNC('week', date), types;
 
--- Reduce threads for INSERT to create fewer, larger files
--- With 12 threads, DuckDB creates ~12 files per partition
--- With 1 thread, DuckDB creates 1 consolidated file per partition
-SET threads = 1;
-
--- Insert from materialized temp table
--- This writes larger, consolidated files per partition
+-- Insert new weekly aggregates
 INSERT INTO wikigrams_weekly
 SELECT * FROM weekly_agg;
 
+-- Show what was updated
+.print "Weeks updated:"
+SELECT geo, week, COUNT(*) as rows_added
+FROM weekly_agg
+GROUP BY geo, week
+ORDER BY geo, week;
+
 -- Show summary
+.print ""
+.print "Total table summary:"
 SELECT
     geo,
     COUNT(DISTINCT week) as weeks,
@@ -67,4 +80,4 @@ GROUP BY geo
 ORDER BY geo;
 EOF
 
-echo "Weekly aggregation complete!"
+echo "Incremental weekly aggregation complete!"
