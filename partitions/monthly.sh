@@ -31,7 +31,7 @@ ALTER TABLE wikigrams_monthly SET PARTITIONED BY (geo, month);
 
 -- For full table refresh, DELETE works for both empty and populated tables
 -- (TRUNCATE would fail on newly created partitioned tables in some cases)
-DELETE FROM wikigrams_monthly;
+TRUNCATE wikigrams_monthly;
 
 -- Materialize aggregation in temp table first (in-memory)
 -- This prevents parallel writes from creating many small files per partition
@@ -48,10 +48,16 @@ GROUP BY geo, DATE_TRUNC('month', date), types;
 -- threads=4 provides good balance between speed and file count
 SET threads = 4;
 
--- Insert from materialized temp table
+-- Increase max open files for partitioned writes
+-- Default is 100, which can cause early flushes and small files
+SET partitioned_write_max_open_files = 500;
+
+-- Insert from materialized temp table with ORDER BY
+-- CRITICAL: ORDER BY partition columns prevents partition switching
 -- This writes larger, consolidated files per partition
 INSERT INTO wikigrams_monthly
-SELECT * FROM monthly_agg;
+SELECT * FROM monthly_agg
+ORDER BY geo, month;
 
 -- Show summary
 SELECT

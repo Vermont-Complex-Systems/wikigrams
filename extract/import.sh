@@ -50,11 +50,22 @@ FROM read_csv(
 )
 WHERE column0 IN ('United States', 'Canada', 'Australia', 'United Kingdom');
 
--- Insert from materialized temp table
+-- Reduce threads for INSERT to create fewer, larger files per partition
+-- threads=4 provides good balance between speed and file count
+SET threads = 4;
+
+-- Increase max open files for partitioned writes
+-- Default is 100, which can cause early flushes and small files
+-- For full dataset: ~500 days × 4 geos = 2000 partitions
+SET partitioned_write_max_open_files = 2500;
+
+-- Insert from materialized temp table with ORDER BY
+-- CRITICAL: ORDER BY partition columns prevents partition switching
 -- For incremental updates: If rows < data_inlining_row_limit, data goes to metadata
 -- For bulk imports: If rows > limit, creates consolidated parquet files per partition
 INSERT INTO wikigrams (geo, date, types, counts)
-SELECT * FROM csv_import;
+SELECT * FROM csv_import
+ORDER BY geo, date;
 
 -- Show import summary
 SELECT
