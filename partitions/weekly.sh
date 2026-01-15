@@ -29,9 +29,13 @@ CREATE TABLE IF NOT EXISTS wikigrams_weekly (
 -- Set partitioning (idempotent)
 ALTER TABLE wikigrams_weekly SET PARTITIONED BY (geo, week);
 
+-- Reduce threads for INSERT to create fewer, larger files
+-- threads=4 provides good balance between speed and file count
+SET threads = 4;
+
 -- For full table refresh, TRUNCATE is more efficient than DELETE
 -- Only truncate if table has data (handles both initial setup and rebuild)
--- DELETE FROM wikigrams_weekly;
+DELETE FROM wikigrams_weekly;
 
 -- Materialize aggregation in temp table first (in-memory)
 -- This prevents parallel writes from creating many small files per partition
@@ -43,10 +47,6 @@ SELECT
     SUM(counts)::BIGINT AS counts
 FROM wikigrams
 GROUP BY geo, DATE_TRUNC('week', date), types;
-
--- Reduce threads for INSERT to create fewer, larger files
--- threads=4 provides good balance between speed and file count
-SET threads = 4;
 
 -- Insert from materialized temp table
 -- This writes larger, consolidated files per partition
