@@ -25,7 +25,7 @@ ALTER TABLE wikigrams_test SET PARTITIONED BY (geo, date);
 -- Configure settings
 CALL testlake.set_option('target_file_size', '512MB');
 
--- Import only 2 days of data for testing
+-- Import 7 days of data for testing (March 3-10, 2025)
 CREATE TEMP TABLE csv_import AS
 SELECT
     column0 AS geo,
@@ -38,9 +38,10 @@ FROM read_csv(
     header=true,
     filename=true
 )
-WHERE column0 IN ('United States', 'Canada')
-  AND regexp_extract(filename, '(\d{4}-\d{2}-\d{2})_', 1) IN ('2024-12-01', '2024-12-02')
-LIMIT 100000;  -- Limit to 100K rows for quick test
+WHERE column0 IN ('United States', 'Canada', 'Australia', 'United Kingdom')
+  AND regexp_extract(filename, '(\d{4}-\d{2}-\d{2})_', 1)
+      BETWEEN '2025-03-03' AND '2025-03-10';
+-- No LIMIT - use full week of data for realistic test
 
 -- Show what we're importing
 .print "Test data summary:"
