@@ -45,9 +45,8 @@ FROM wikigrams
 GROUP BY geo, DATE_TRUNC('month', date), types;
 
 -- Reduce threads for INSERT to create fewer, larger files
--- With 12 threads, DuckDB creates ~12 files per partition
--- With 1 thread, DuckDB creates 1 consolidated file per partition
-SET threads = 1;
+-- threads=4 provides good balance between speed and file count
+SET threads = 4;
 
 -- Insert from materialized temp table
 -- This writes larger, consolidated files per partition

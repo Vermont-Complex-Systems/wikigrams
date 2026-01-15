@@ -50,9 +50,8 @@ FROM read_csv(
 WHERE column0 IN ('United States', 'Canada', 'Australia', 'United Kingdom');
 
 -- Reduce threads for INSERT to create fewer, larger files per partition
--- With multiple threads, DuckDB creates many small files per partition
--- With 1 thread, DuckDB creates consolidated files per partition
-SET threads = 1;
+-- threads=4 provides good balance between speed and file count
+SET threads = 4;
 
 -- Insert from materialized temp table
 -- For incremental updates: If rows < data_inlining_row_limit, data goes to metadata
