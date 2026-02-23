@@ -5,58 +5,41 @@ source .venv/bin/activate
 echo "Starting monthly aggregation..."
 
 duckdb << 'EOF'
-SET memory_limit = '30GB';
-SET threads = 12;
-SET temp_directory = '/netfiles/compethicslab/wikimedia/duckdb_tmp';
-
 ATTACH 'ducklake:./metadata.ducklake' AS wikilake
 (DATA_PATH '/netfiles/compethicslab/wikimedia');
 
 USE wikilake;
 
--- Configure target file size BEFORE creating table
--- This helps DuckDB write larger files per partition
-CALL wikilake.set_option('target_file_size', '512MB');
+-- Drop and recreate table to actually remove old parquet files
+-- DELETE FROM only marks data as deleted but keeps files
+DROP TABLE IF EXISTS wikigrams_monthly;
 
--- Create table if it doesn't exist
-CREATE TABLE IF NOT EXISTS wikigrams_monthly (
+CREATE TABLE wikigrams_monthly (
     geo TEXT,
     month DATE,
     types TEXT,
-    counts BIGINT
+    counts BIGINT,
+    rank BIGINT
 );
 
--- Set partitioning (idempotent)
+-- Set partitioning
 ALTER TABLE wikigrams_monthly SET PARTITIONED BY (geo, month);
 
--- For full table refresh, DELETE works for both empty and populated tables
--- (TRUNCATE would fail on newly created partitioned tables in some cases)
-TRUNCATE wikigrams_monthly;
-
--- Materialize aggregation in temp table first (in-memory)
--- This prevents parallel writes from creating many small files per partition
-CREATE TEMP TABLE monthly_agg AS
-SELECT
-    geo,
-    DATE_TRUNC('month', date) as month,
-    types,
-    SUM(counts)::BIGINT AS counts
-FROM wikigrams
-GROUP BY geo, DATE_TRUNC('month', date), types;
-
--- Reduce threads for INSERT to create fewer, larger files
--- threads=4 provides good balance between speed and file count
-SET threads = 4;
-
--- Increase max open files for partitioned writes
--- Default is 100, which can cause early flushes and small files
-SET partitioned_write_max_open_files = 500;
-
--- Insert from materialized temp table with ORDER BY
--- CRITICAL: ORDER BY partition columns prevents partition switching
--- This writes larger, consolidated files per partition
+-- Insert all aggregated data in ONE transaction with ORDER BY
+-- ORDER BY partition columns prevents partition switching during write
 INSERT INTO wikigrams_monthly
-SELECT * FROM monthly_agg
+WITH agg AS (
+    SELECT
+        geo,
+        DATE_TRUNC('month', date) AS month,
+        types,
+        SUM(counts)::BIGINT AS counts
+    FROM wikigrams
+    GROUP BY geo, DATE_TRUNC('month', date), types
+)
+SELECT geo, month, types, counts,
+    ROW_NUMBER() OVER (PARTITION BY geo, month ORDER BY counts DESC) AS rank
+FROM agg
 ORDER BY geo, month;
 
 -- Show summary
