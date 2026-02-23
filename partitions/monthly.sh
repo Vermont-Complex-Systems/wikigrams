@@ -38,7 +38,7 @@ WITH agg AS (
     GROUP BY geo, DATE_TRUNC('month', date), types
 )
 SELECT geo, month, types, counts,
-    ROW_NUMBER() OVER (PARTITION BY geo, month ORDER BY counts DESC) AS rank
+    RANK() OVER (PARTITION BY geo, month ORDER BY counts DESC) AS rank
 FROM agg
 ORDER BY geo, month;
 

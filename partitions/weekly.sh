@@ -38,7 +38,7 @@ WITH agg AS (
     GROUP BY geo, DATE_TRUNC('week', date), types
 )
 SELECT geo, week, types, counts,
-    ROW_NUMBER() OVER (PARTITION BY geo, week ORDER BY counts DESC) AS rank
+    RANK() OVER (PARTITION BY geo, week ORDER BY counts DESC) AS rank
 FROM agg
 ORDER BY geo, week;
 

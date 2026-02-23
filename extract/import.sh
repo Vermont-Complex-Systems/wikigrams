@@ -43,7 +43,7 @@ WITH raw AS (
     WHERE column0 IN ('United States', 'Canada', 'Australia', 'United Kingdom')
 )
 SELECT geo, date, types, counts,
-    ROW_NUMBER() OVER (PARTITION BY geo, date ORDER BY counts DESC) AS rank
+    RANK() OVER (PARTITION BY geo, date ORDER BY counts DESC) AS rank
 FROM raw
 ORDER BY geo, date;
 EOF
