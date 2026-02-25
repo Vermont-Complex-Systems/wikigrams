@@ -18,6 +18,7 @@ from typing import Dict
 from storywrangler.validation import EntityValidator, EndpointValidator
 from pyprojroot import here
 import duckdb
+import yaml
 import os
 from dotenv import load_dotenv
 
@@ -31,180 +32,132 @@ class WikigramsAdapter:
         self.data_path = Path(os.getenv("DATA_PATH"))
         self.entity_validator = EntityValidator()
         self.endpoint_validator = EndpointValidator()
-        self.ducklake_path = self.project_root / "metadata.ducklake"
-    
+        self.entities_path = self.project_root / "adapter" / "entities.yaml"
+        self.adapter_parquet = self.data_path / "adapter" / "adapter.parquet"
+
     def get_entity_mappings(self) -> Dict[str, Dict]:
-        """Map location local_ids to entity identifiers"""
-        return {
-            "United States": {
-                "local_id": "United States",
-                "entity_id": "wikidata:Q30",
-                "entity_ids": ["iso:US", "local:wikigrams:united_states"],
-                "entity_name": "United States",
-            },
-            "United Kingdom": {
-                "local_id": "United Kingdom",
-                "entity_id": "wikidata:Q145",
-                "entity_ids": ["iso:GB", "local:wikigrams:united_kingdom"],
-                "entity_name": "United Kingdom",
-            },
-            "Canada": {
-                "local_id": "Canada",
-                "entity_id": "wikidata:Q16",
-                "entity_ids": ["iso:CA", "local:wikigrams:canada"],
-                "entity_name": "Canada",
-            },
-            "Australia": {
-                "local_id": "Australia",
-                "entity_id": "wikidata:Q408",
-                "entity_ids": ["iso:AU", "local:wikigrams:australia"],
-                "entity_name": "Australia",
-            },
-        }
-    
-    def connect_ducklake(self) -> duckdb.DuckDBPyConnection:
-        """Connect to the ducklake database"""
-        if not self.ducklake_path.exists():
-            raise FileNotFoundError(f"Ducklake file not found: {self.ducklake_path}")
+        """Load entity mappings from entities.yaml"""
+        with open(self.entities_path) as f:
+            mappings = yaml.safe_load(f)
+        for local_id, mapping in mappings.items():
+            mapping["local_id"] = local_id
+        return mappings
 
-        conn = duckdb.connect()
-        conn.execute(f"ATTACH 'ducklake:metadata.ducklake' AS wikilake (DATA_PATH '{self.data_path}');")
-        conn.execute("USE wikilake;")
-        print(f"📊 Connected to ducklake: {self.ducklake_path}")
-        print(f"📊 Data path: {self.data_path}")
-        return conn
+    def validate_entities(self):
+        """Validate all entity mappings against Storywrangler standards"""
+        mappings = self.get_entity_mappings()
 
-    def create_adapter_table(self, conn: duckdb.DuckDBPyConnection):
-        """Create adapter table if it doesn't exist"""
-        # Check if adapter table exists
-        tables = [x[0] for x in conn.execute("SHOW TABLES").fetchall()]
-
-        if 'adapter' not in tables:
-            print("🔧 Creating adapter table...")
-            conn.execute("""
-                CREATE TABLE adapter (
-                    local_id VARCHAR,
-                    entity_id VARCHAR,
-                    entity_name VARCHAR,
-                    entity_ids VARCHAR[]
-                )
-            """)
-        else:
-            print("📊 Adapter table already exists")
-
-    def sync_entity_mappings(self, conn: duckdb.DuckDBPyConnection):
-        """Insert entity mappings for all locations in wikigrams table"""
-        entity_mappings = self.get_entity_mappings()
-
-        # Check if there are any new locations to map
-        new_count = conn.execute("""
-            SELECT COUNT(DISTINCT w.geo)
-            FROM wikigrams w
-            LEFT JOIN adapter a ON w.geo = a.local_id
-            WHERE a.local_id IS NULL
-        """).fetchone()[0]
-
-        if new_count == 0:
-            print("✓ All locations already mapped")
-            return
-
-        # Get new locations
-        locations = conn.execute("""
-            SELECT DISTINCT w.geo
-            FROM wikigrams w
-            LEFT JOIN adapter a ON w.geo = a.local_id
-            WHERE a.local_id IS NULL
-        """).fetchall()
-
-        # Prepare rows for insertion
-        rows = []
-        for (location,) in locations:
-            if location not in entity_mappings:
-                raise ValueError(f"No entity mapping defined for '{location}'")
-
-            mapping = entity_mappings[location]
-
-            # Validate entity ID
+        for local_id, mapping in mappings.items():
             if not self.entity_validator.validate(mapping["entity_id"]):
-                raise ValueError(f"Invalid entity_id: {mapping['entity_id']}")
+                raise ValueError(f"Invalid entity_id for '{local_id}': {mapping['entity_id']}")
 
-            rows.append((mapping["local_id"], mapping["entity_id"],
-                        mapping["entity_name"], mapping["entity_ids"]))
+        print(f"Entity validation passed ({len(mappings)} mappings)")
+        return mappings
 
-        # Insert new mappings
-        conn.executemany(
-            "INSERT INTO adapter (local_id, entity_id, entity_name, entity_ids) VALUES (?, ?, ?, ?)",
-            rows
-        )
-        print(f"✓ Inserted {len(rows)} new mapping(s)")
+    def validate_geos(self, conn: duckdb.DuckDBPyConnection):
+        """Check that all geos in the data have entity mappings"""
+        mappings = self.get_entity_mappings()
+
+        parquet_path = self.data_path / "wikigrams" / "**" / "*.parquet"
+        geos = [row[0] for row in conn.execute(f"""
+            SELECT DISTINCT geo
+            FROM read_parquet('{parquet_path}', hive_partitioning=true)
+        """).fetchall()]
+
+        unmapped = [g for g in geos if g not in mappings]
+        if unmapped:
+            raise ValueError(f"No entity mapping for geos: {unmapped}")
+
+        print(f"All {len(geos)} geos have entity mappings")
 
     def validate_wikigrams_schema(self, conn: duckdb.DuckDBPyConnection):
         """Validate that wikigrams data conforms to top-ngrams endpoint schema"""
-        print("🔍 Validating wikigrams schema against Storywrangler standards...")
+        print("Validating wikigrams schema against Storywrangler standards...")
 
-        # Get schema information from wikigrams table
-        schema_result = conn.execute("DESCRIBE wikigrams").fetchall()
+        parquet_path = self.data_path / "wikigrams" / "**" / "*.parquet"
+        schema_result = conn.execute(f"""
+            DESCRIBE SELECT * FROM read_parquet('{parquet_path}', hive_partitioning=true)
+        """).fetchall()
         columns = {row[0]: {'type': row[1]} for row in schema_result}
 
         schema = {'columns': columns}
 
-        # Validate against top-ngrams endpoint requirements
         validation = self.endpoint_validator.validate_top_ngrams_schema(schema)
 
         if not validation['valid']:
-            print("❌ Schema validation failed:")
+            print("Schema validation failed:")
             for error in validation['errors']:
                 print(f"   - {error}")
             raise ValueError("Wikigrams schema does not conform to Storywrangler top-ngrams endpoint requirements")
 
-        print("✅ Schema validation passed - wikigrams data conforms to top-ngrams endpoint")
+        print("Schema validation passed")
         return validation['column_mapping']
 
+    def write_adapter_parquet(self, conn: duckdb.DuckDBPyConnection):
+        """Write entity mappings as a parquet file to the shared data path"""
+        mappings = self.get_entity_mappings()
+
+        rows = [
+            (m["local_id"], m["entity_id"], m["entity_name"], m["entity_ids"])
+            for m in mappings.values()
+        ]
+
+        conn.execute("""
+            CREATE TEMP TABLE adapter (
+                local_id VARCHAR,
+                entity_id VARCHAR,
+                entity_name VARCHAR,
+                entity_ids VARCHAR[]
+            )
+        """)
+        conn.executemany(
+            "INSERT INTO adapter VALUES (?, ?, ?, ?)", rows
+        )
+
+        self.adapter_parquet.parent.mkdir(parents=True, exist_ok=True)
+        conn.execute(f"""
+            COPY adapter TO '{self.adapter_parquet}' (FORMAT PARQUET)
+        """)
+        print(f"Wrote adapter parquet to {self.adapter_parquet}")
+
     def prepare(self):
-        """Prepare dataset metadata and update DuckDB with entity mappings
+        """Prepare and validate dataset
 
         Steps:
-        1. Validate wikigrams schema conforms to top-ngrams endpoint
-        2. Create adapter table if it doesn't exist
-        3. Insert new entity mappings for locations in the database
+        1. Validate entity mappings in entities.yaml
+        2. Validate wikigrams schema conforms to top-ngrams endpoint
+        3. Check all geos in data have entity mappings
+        4. Write entity mappings as parquet to shared data path
         """
-        print("🔧 Preparing Wikigrams dataset\n")
+        print("Preparing Wikigrams dataset\n")
 
-        # Connect to DuckDB
-        conn = self.connect_ducklake()
+        conn = duckdb.connect()
 
         try:
-            # (i) Validate wikigrams schema against Storywrangler standards
+            self.validate_entities()
             self.validate_wikigrams_schema(conn)
-
-            # (ii) Create adapter table if it doesn't exist
-            self.create_adapter_table(conn)
-
-            # (iii) Insert new entity mappings (existing ones are skipped)
-            self.sync_entity_mappings(conn)
-
-            print(f"\n✅ Adapter complete")
-
+            self.validate_geos(conn)
+            self.write_adapter_parquet(conn)
+            print(f"\nAdapter complete")
         finally:
             conn.close()
-    
 
 
 def main():
     """Run the adapter"""
 
-    # Initialize adapter (reads from .env)
     adapter = WikigramsAdapter()
 
-    print(f"📁 Configuration:")
+    print(f"Configuration:")
     print(f"  Dataset ID: {adapter.dataset_id}")
     print(f"  Data path: {adapter.data_path}")
-    print(f"  DuckDB: {adapter.ducklake_path}")
+    print(f"  Entities: {adapter.entities_path}")
+    print(f"  Adapter output: {adapter.adapter_parquet}")
     print()
 
-    # Check DuckDB exists
-    if not adapter.ducklake_path.exists():
-        print(f"❌ DuckDB not found: {adapter.ducklake_path}")
+    wikigrams_dir = adapter.data_path / "wikigrams"
+    if not wikigrams_dir.exists():
+        print(f"Wikigrams data not found: {wikigrams_dir}")
         print("   Run the extract pipeline first!")
         return
 

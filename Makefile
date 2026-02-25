@@ -10,7 +10,7 @@ partition-month:
 	bash partitions/monthly.sh
 
 prepare:
-	uv run python adapter/src/prepare.py
+	uv run python adapter/prepare.py
 
 submit:
-	uv run python adapter/src/submit.py
+	uv run python adapter/submit.py

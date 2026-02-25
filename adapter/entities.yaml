@@ -1,0 +1,19 @@
+United States:
+  entity_id: "wikidata:Q30"
+  entity_ids: ["iso:US", "local:wikigrams:united_states"]
+  entity_name: "United States"
+
+United Kingdom:
+  entity_id: "wikidata:Q145"
+  entity_ids: ["iso:GB", "local:wikigrams:united_kingdom"]
+  entity_name: "United Kingdom"
+
+Canada:
+  entity_id: "wikidata:Q16"
+  entity_ids: ["iso:CA", "local:wikigrams:canada"]
+  entity_name: "Canada"
+
+Australia:
+  entity_id: "wikidata:Q408"
+  entity_ids: ["iso:AU", "local:wikigrams:australia"]
+  entity_name: "Australia"

@@ -1,0 +1,9 @@
+.env
+uv.lock
+.tmp/
+*.out
+metadata.ducklake*
+adapter.duckdb*
+test_metadata.ducklake*
+test_data/
+job.sh
