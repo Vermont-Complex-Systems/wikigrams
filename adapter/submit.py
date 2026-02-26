@@ -9,7 +9,7 @@ import duckdb
 from pathlib import Path
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Table directories to register
 TABLE_DIRS = [
@@ -37,6 +37,49 @@ def get_table_schema(data_path, table_dir):
     """).fetchall()
     conn.close()
     return {row[0]: row[1] for row in schema_result}
+
+def get_partitioning_metadata(data_path):
+    """Query parquet files to build partitioning metadata for API registration."""
+    conn = duckdb.connect()
+
+    try:
+        daily_path = Path(data_path) / "wikigrams" / "**" / "*.parquet"
+        daily = conn.execute(f"""
+            SELECT geo, MIN(date)::TEXT, MAX(date)::TEXT
+            FROM read_parquet('{daily_path}', hive_partitioning=true)
+            GROUP BY geo
+        """).fetchall()
+
+        weekly_path = Path(data_path) / "wikigrams_weekly" / "**" / "*.parquet"
+        weekly = conn.execute(f"""
+            SELECT geo, MIN(week)::TEXT, MAX(week)::TEXT
+            FROM read_parquet('{weekly_path}', hive_partitioning=true)
+            GROUP BY geo
+        """).fetchall()
+
+        monthly_path = Path(data_path) / "wikigrams_monthly" / "**" / "*.parquet"
+        monthly = conn.execute(f"""
+            SELECT geo, MIN(month)::TEXT, MAX(month)::TEXT
+            FROM read_parquet('{monthly_path}', hive_partitioning=true)
+            GROUP BY geo
+        """).fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "granularities": ["daily", "weekly", "monthly"],
+        "daily": {
+            "available": {row[0]: {"min": row[1], "max": row[2]} for row in daily}
+        },
+        "weekly": {
+            "start_day": "monday",
+            "available": {row[0]: {"min": row[1], "max": row[2]} for row in weekly}
+        },
+        "monthly": {
+            "available": {row[0]: {"min": row[1], "max": row[2]} for row in monthly}
+        }
+    }
+
 
 def get_table_metadata(data_path):
     """Discover parquet files for each table by globbing the data directory.
@@ -84,15 +127,17 @@ def register_wikigrams_datalake():
         "dataset_id": dataset_id,
         "data_location": data_location,
         "data_format": "parquet_hive",
-        "description": "Wikipedia n-grams by frequency, date, and location with entity mappings",
+        "description": "Wikipedia n-grams by frequency, date, and location with entity mappings and ranks",
         "tables_metadata": file_paths,
 
         # Schema (for reference when building queries)
         "data_schema": schema,
 
+        # Partitioning metadata
+        "partitioning": get_partitioning_metadata(data_location),
+
         # Entity mapping configuration
         "entity_mapping": {
-            "table": "adapter",
             "path": str(adapter_path),
             "local_id_column": "local_id",
             "entity_id_column": "entity_id"
