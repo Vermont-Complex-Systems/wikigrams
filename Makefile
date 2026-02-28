@@ -1,7 +1,13 @@
-.PHONY: all import partition-week partition-month prepare submit
+SHELL := bash
+.ONESHELL:
+.SHELLFLAGS := -eu -o pipefail -c
 
-import:
-	bash extract/import.sh
+.PHONY: extract partition-week partition-month prepare submit
+
+# --- Extract: processes only missing days (~12s/day) ---
+# First run = full seed; subsequent runs = incremental update
+extract:
+	bash extract/extract.sh
 
 partition-week:
 	bash partitions/weekly.sh
